@@ -207,7 +207,7 @@ def main():
     rclpy.init()
     node = DroneNode()
     try:
-        if node.arm_and_takeoff(5.0): 
+        if node.arm_and_takeoff(3.0): 
             time.sleep(8)
             node.land_drone()
     except Exception as e:
