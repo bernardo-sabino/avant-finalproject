@@ -8,13 +8,24 @@ from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
 from mavros_msgs.msg import State
 
 # Importação da interfaces
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist, Quaternion
 from std_msgs.msg import Float32, Bool 
 
 # Importação de módulos padrões 
 import math, time
 import numpy as np
- 
+
+# ===== A MÁQUINA DE ESTADOS DA MISSÃO =====
+class MissionState:
+    INIT = 0          # Estado inicial, esperando conexão
+    ARM_AND_TAKEOFF = 1 # Enviando comandos de decolagem
+    WAIT_FOR_TAKEOFF = 2 # Esperando o drone subir
+    MOVING_TO_START = 3  # Indo para o waypoint inicial
+    TURNING_TO_SOUTH = 4 # Girando para -Y
+    FOLLOWING_LINE = 5   # Executando o seguidor de linha
+    MISSION_COMPLETE = 6 # Travessão detectado, pousando
+    EMERGENCY_LAND = 7   # Pouso de emergência
+
 class DroneNode(Node):
 
     def __init__(self):
@@ -27,31 +38,44 @@ class DroneNode(Node):
             depth=10
         )
         
-        self.current_state = State() 
+        # Estado atual do Drone (MAVROS)
+        self.current_state_mav = State() 
         self.current_pose = None 
         self.current_orientation = None 
 
-        # Parâmetros de Controle
-        self.foward_velocity = 0.3  # Velocidade de avanço 
-        self.kp_yaw = 0.003         # Ganho Proporcional 
-        self.max_yaw_rate = 0.8     # Velocidade máxima de rotação
-        self.search_yaw_rate = 0.3  # Velocidade de giro para procurar a linha 
+        # --- Parâmetros da Missão ---
+        self.ALTITUDE_DE_VOO = 1.0 
+        self.START_POS_X = 0.0
+        self.START_POS_Y = -2.0 
+        self.tolerance = 0.3 # Tolerância de 30cm para waypoints
 
-        # Variáveis de Estado da Missão 
+        # --- Parâmetros de Controle (Seguidor de Linha) ---
+        self.kp_strafe = 0.002 # Ganho Proporcional para o movimento lateral
+        self.foward_velocity = 0.25 # Anda 25cm para frente a cada passo
+        self.frequencia_missao = 5.0 # Hz (5 "passos" por segundo)
+
+        # --- Variáveis de Estado da Visão ---
         self.line_error = 0.0
         self.line_lost = True
         self.crossbar_detected = False
+
+        # --- Variáveis da Máquina de Estados da Missão ---
+        self.mission_state = MissionState.INIT
+        self.last_state_change_time = self.get_clock().now()
+        
+        # --- Alvos de Posição/Orientação ---
+        self.target_pose = PoseStamped()
+        self.target_pose.header.frame_id = 'map'
+        self.south_orientation_q = Quaternion()
+        target_yaw_rad_south = -math.pi / 2.0
+        self.south_orientation_q.z = math.sin(target_yaw_rad_south / 2.0)
+        self.south_orientation_q.w = math.cos(target_yaw_rad_south / 2.0)
+
 
         # Publishers
         self.local_pos_pub = self.create_publisher(PoseStamped, \
         '/mavros/setpoint_position/local', qos_profile)  
         
-        self.vel_pub = self.create_publisher(
-            Twist,
-            '/mavros/setpoint_velocity/cmd_vel_unstamped',
-            qos_profile
-        )
-
         # Subscribers
         self.state_sub = self.create_subscription(State, '/mavros/state', \
         self.state_cb, qos_profile)
@@ -71,21 +95,26 @@ class DroneNode(Node):
             self.crossbar_callback,
             qos_profile
         )
+        
+        # --- O "Coração" da Missão ---
+        # Este timer roda a lógica da missão X vezes por segundo
+        self.mission_timer = self.create_timer(1.0 / self.frequencia_missao, self.mission_loop)
+        
+        # Timer para o MAVROS (necessário para manter o stream)
+        self.mavros_stream_timer = self.create_timer(0.1, self.mavros_stream_loop) 
 
-        self.get_logger().info("Nó drone_mission_node inicializado com sucesso") 
-        self.wait_for_connection()
+        self.get_logger().info("Nó drone_mission_node inicializado com Máquina de Estados.") 
 
-    # ===== Métodos Callback =====
+    # ===== Funções de Callback (Lógica Assíncrona) =====
     
     def state_cb(self, msg):
-        self.current_state = msg
+        self.current_state_mav = msg
+    
     def pose_cb(self, msg):
         if msg and msg.pose: 
             self.current_pose = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
             self.current_orientation = msg.pose.orientation
-        else:
-            self.current_pose = None
-            self.current_orientation = None
+    
     def error_callback(self, msg):
         if math.isnan(msg.data):
             self.line_lost = True
@@ -93,230 +122,221 @@ class DroneNode(Node):
         else:
             self.line_lost = False
             self.line_error = msg.data
+            
     def crossbar_callback(self, msg):
         if msg.data:
             self.crossbar_detected = True
-            self.get_logger().info("!!! TRAVESSÃO DETECTADO !!! Parando a missão.")    
+            
+    # ===== Serviços do Drone (Funções de "Ação") =====
     
-    # ===== Método de Conexão com a FCU =====
-    def wait_for_connection(self):
-        self.get_logger().info("FCU sendo conectada...")
-        while rclpy.ok() and not self.current_state.connected:
-            rclpy.spin_once(self)
-            time.sleep(0.2)
-        self.get_logger().info("A FCU foi conectada com sucesso!")
+    def call_service_async(self, client, request):
+        """Função helper para chamar um serviço sem bloquear."""
+        if not client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().error(f"Serviço {client.srv_name} não está disponível")
+            self.set_mission_state(MissionState.EMERGENCY_LAND)
+            return
+        
+        future = client.call_async(request)
+        future.add_done_callback(self.service_response_callback)
 
-    # ===== Serviços do Drone =====
+    def service_response_callback(self, future):
+        """Verifica se a chamada de serviço foi bem-sucedida."""
+        try:
+            response = future.result()
+            
+            is_successful = False
+            
+            # Verifica o atributo 'success' (usado por CommandBool, CommandTOL)
+            if hasattr(response, 'success'):
+                is_successful = response.success
+            
+            # Verifica o atributo 'mode_sent' (usado por SetMode)
+            elif hasattr(response, 'mode_sent'):
+                is_successful = response.mode_sent
+            
+            if not is_successful:
+                 self.get_logger().error(f"Serviço MAVROS falhou (success=False ou mode_sent=False): {future}")
+                 self.set_mission_state(MissionState.EMERGENCY_LAND)
+
+        except Exception as e:
+            # Pega outros erros (como o AttributeError que vimos)
+            self.get_logger().error(f"Exceção na chamada de serviço: {e}")
+            self.set_mission_state(MissionState.EMERGENCY_LAND)
+
     def set_mode(self, custom_mode):
         client = self.create_client(SetMode, '/mavros/set_mode')
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('Serviço /mavros/set_mode não está disponível')
-            return False
         req = SetMode.Request()
         req.custom_mode = custom_mode
-        future = client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result() and future.result().mode_sent
+        self.call_service_async(client, req)
 
     def arm_drone(self):
         client = self.create_client(CommandBool, '/mavros/cmd/arming')
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('Serviço /mavros/cmd/arming não disponível')
-            return False
         req = CommandBool.Request()
         req.value = True
-        future = client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result() and future.result().success
+        self.call_service_async(client, req)
 
     def takeoff_drone(self, altitude):
         client = self.create_client(CommandTOL, '/mavros/cmd/takeoff')
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('Serviço /mavros/cmd/takeoff não disponível')
-            return False
         req = CommandTOL.Request()
         req.altitude = altitude
-        future = client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result() and future.result().success
+        self.call_service_async(client, req)
 
     def land_drone(self):
         client = self.create_client(CommandTOL, '/mavros/cmd/land')
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('Serviço /mavros/cmd/land não disponível')
-            return False
         req = CommandTOL.Request()
         req.altitude = 0.0
-        future = client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result() and future.result().success
+        self.call_service_async(client, req)
 
-    # ===== Métodos de Movimentação =====
-    
-    def go_to_position(self, x, y, z, tolerance=0.3): 
-        """
-        Move o drone para uma posição (x, y, z) e espera até chegar,
-        MANTENDO a orientação (yaw) que tinha no início do comando.
-        """
-        self.get_logger().info(f"[Navegação] Movendo para Posição: (x={x}, y={y}, z={z})")
+    # ===== Lógica da Máquina de Estados (O "Cérebro") =====
 
-        target_pose = PoseStamped()
-        target_pose.header.frame_id = 'map' 
-
-        # Espera até termos uma leitura da pose e orientação atuais
-        while rclpy.ok() and (self.current_pose is None or self.current_orientation is None):
-            self.get_logger().warn("[Navegação] Aguardando Posição e Orientação atuais do drone...")
-            rclpy.spin_once(self, timeout_sec=0.5)
-            if not rclpy.ok(): return False # Sai se o ROS parar
-        
-        # "Trava" a orientação alvo
-        target_orientation_to_keep = self.current_orientation
-
-        while rclpy.ok():
-            # Atualiza o timestamp
-            target_pose.header.stamp = self.get_clock().now().to_msg()
+    def set_mission_state(self, new_state):
+        """Muda o estado da missão e loga."""
+        if self.mission_state != new_state:
+            self.get_logger().info(f"[MISSÃO] Mudando de Estado: {self.mission_state} -> {new_state}")
+            self.mission_state = new_state
+            self.last_state_change_time = self.get_clock().now()
             
-            # Define a posição alvo
-            target_pose.pose.position.x = float(x)
-            target_pose.pose.position.y = float(y)
-            target_pose.pose.position.z = float(z)
-            # Define a orientação alvo 
-            target_pose.pose.orientation = target_orientation_to_keep
+    def get_time_in_state(self):
+        """Retorna o tempo (em segundos) desde a última mudança de estado."""
+        return (self.get_clock().now() - self.last_state_change_time).nanoseconds / 1e9
 
-            self.local_pos_pub.publish(target_pose)
-
-            # Processa callbacks 
-            rclpy.spin_once(self, timeout_sec=0.1) 
-
-            if self.current_pose is None:
-                continue # Pula este ciclo se a pose for perdida
-
-            # Calcula a distância
-            current_x, current_y, current_z = self.current_pose
-            distance = math.sqrt((current_x - x)**2 + (current_y - y)**2 + (current_z - z)**2)
-
-            if distance < tolerance:
-                self.get_logger().info("[Navegação] Posição alcançada com sucesso!")
-                break
+    def check_distance_to_target(self):
+        """Verifica se o drone chegou ao target_pose."""
+        if self.current_pose is None:
+            return False
         
-        time.sleep(1) # Espera 1s para estabilizar
-        return True
-
-    
-    # ===== Iniciando o Drone =====
-    def arm_and_takeoff(self, altitude=1.0):   
-        self.get_logger().info("Iniciando sequência de decolagem...")
-        if not self.set_mode('GUIDED'):
-            self.get_logger().error("Falha ao definir modo GUIDED")
-            return False 
-        time.sleep(1) # Pequena pausa
-        if not self.arm_drone():
-            self.get_logger().error("Falha ao armar o drone")
-            return False 
-        time.sleep(2)
-        if not self.takeoff_drone(altitude):
-            self.get_logger().error("Falha na decolagem")
-            return False 
-        time.sleep(8) # Tempo para o drone subir e estabilizar
-        self.get_logger().info("Decolagem concluída com sucesso.")
-        return True
-    
-    # ===== Missão =====
-
-    def follow_line(self):
-        """
-        Inicia o loop de controle principal para seguir a linha.
-        O loop para QUANDO self.crossbar_detected == True.
-        """
-        self.get_logger().info("[MISSÃO] MODO SEGUIDOR DE LINHA ATIVADO!")
+        pos = self.target_pose.pose.position
+        curr = self.current_pose
         
-        twist_msg = Twist() # Cria a mensagem de velocidade
+        distance = math.sqrt((curr[0] - pos.x)**2 + (curr[1] - pos.y)**2 + (curr[2] - pos.z)**2)
         
-        # Frequência do loop de controle 
-        rate = self.create_rate(10) 
+        return distance < self.tolerance
 
-        # Roda ENQUANTO o ROS estiver OK E o travessão NÃO for detectado
-        while rclpy.ok() and not self.crossbar_detected:
-            
-            # Processa callbacks 
-            rclpy.spin_once(self, timeout_sec=0.0) 
+    def mavros_stream_loop(self):
+        """Publica o target_pose 10x/seg para manter o MAVROS feliz."""
+        if self.mission_state > MissionState.WAIT_FOR_TAKEOFF and self.mission_state < MissionState.MISSION_COMPLETE:
+            self.target_pose.header.stamp = self.get_clock().now().to_msg()
+            self.local_pos_pub.publish(self.target_pose)
 
-            if self.line_lost:
-                # LINHA PERDIDA: Parar de avançar e girar para procurar
-                twist_msg.linear.x = 0.0  
-                twist_msg.angular.z = self.search_yaw_rate 
-                self.get_logger().warn("[MISSÃO] Linha perdida! Procurando...", throttle_duration_sec=1.0)
-            
+    def mission_loop(self):
+        """O "Coração" da missão, chamado pelo timer."""
+        
+        # Estado 0: Inicialização
+        if self.mission_state == MissionState.INIT:
+            if self.current_state_mav.connected and self.current_pose is not None:
+                self.get_logger().info("FCU conectada e pose recebida. Iniciando missão.")
+                self.set_mission_state(MissionState.ARM_AND_TAKEOFF)
             else:
-                # LINHA ENCONTRADA: Aplicar controle Proporcional
-                twist_msg.linear.x = self.foward_velocity 
-                
-                # Cálculo do Controle Proporcional
-                # error = centro - cx
-                # Se erro > 0 (linha à esquerda), queremos yaw > 0 (girar p/ esquerda)
-                target_yaw_rate = self.kp_yaw * self.line_error
-                
-                # Limita a velocidade de rotação
-                twist_msg.angular.z = np.clip(target_yaw_rate, -self.max_yaw_rate, self.max_yaw_rate)
+                self.get_logger().info("Aguardando conexão com FCU e primeira pose...", throttle_duration_sec=2.0)
+            return
 
-            # Publica o comando de velocidade
-            self.vel_pub.publish(twist_msg)
+        # Estado 1: Armar e Decolar
+        if self.mission_state == MissionState.ARM_AND_TAKEOFF:
+            self.set_mode('GUIDED')
+            time.sleep(0.5) # Pequena pausa entre comandos
+            self.arm_drone()
+            time.sleep(1.0)
+            self.takeoff_drone(self.ALTITUDE_DE_VOO)
+            # Define o "alvo" inicial como a posição de decolagem + altitude
+            self.target_pose.pose.position.x = self.current_pose[0]
+            self.target_pose.pose.position.y = self.current_pose[1]
+            self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
+            self.set_mission_state(MissionState.WAIT_FOR_TAKEOFF)
+            return
+
+        # Estado 2: Esperando a Decolagem
+        if self.mission_state == MissionState.WAIT_FOR_TAKEOFF:
+            # Espera 8 segundos para o drone subir
+            if self.get_time_in_state() > 8.0:
+                self.get_logger().info("Decolagem concluída. Movendo para a posição inicial.")
+                # Define o próximo alvo (waypoint inicial)
+                self.target_pose.pose.position.x = self.START_POS_X
+                self.target_pose.pose.position.y = self.START_POS_Y
+                self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
+                self.target_pose.pose.orientation = self.current_orientation # Mantém orientação
+                self.set_mission_state(MissionState.MOVING_TO_START)
+            return
+
+        # Estado 3: Movendo para a Posição Inicial
+        if self.mission_state == MissionState.MOVING_TO_START:
+            if self.check_distance_to_target():
+                self.get_logger().info("Posição inicial alcançada. Girando para o Sul.")
+                # Define o próximo alvo (mesma posição, nova orientação)
+                self.target_pose.pose.position.x = self.START_POS_X
+                self.target_pose.pose.position.y = self.START_POS_Y
+                self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
+                self.target_pose.pose.orientation = self.south_orientation_q # Gira para o Sul
+                self.set_mission_state(MissionState.TURNING_TO_SOUTH)
+            return
+
+        # Estado 4: Girando para o Sul
+        if self.mission_state == MissionState.TURNING_TO_SOUTH:
+            # Espera 3 segundos para o giro completar
+            if self.get_time_in_state() > 3.0:
+                self.get_logger().info("Giro concluído. Iniciando seguidor de linha.")
+                self.set_mission_state(MissionState.FOLLOWING_LINE)
+            return
+
+        # Estado 5: Seguindo a Linha
+        if self.mission_state == MissionState.FOLLOWING_LINE:
+            # Verifica a condição de parada
+            if self.crossbar_detected:
+                self.get_logger().info("Travessão detectado! Missão completa.")
+                self.set_mission_state(MissionState.MISSION_COMPLETE)
+                self.land_drone()
+                return
+
+            # Lógica do seguidor (Sua lógica de "passo-a-passo")
+            if self.line_lost:
+                self.get_logger().warn("[MISSÃO] Linha perdida! Pairando no local...", throttle_duration_sec=1.0)
+                # O loop mavros_stream_timer continua publicando a última pose,
+                # então o drone paira (hover) automaticamente.
+            else:
+                # LINHA ENCONTRADA: Calcular e atualizar o próximo waypoint
+                # Suas orientações: -Y (frente), +X (esquerda)
+                # Nosso erro: error = centro - cx.
+                # Se linha está à ESQUERDA (cx < centro), error é POSITIVO (ex: 70.0)
+                # Precisamos corrigir para a ESQUERDA (mover drone no eixo +X).
+                
+                # 1. Cálculo do passo para frente (no eixo -Y)
+                dt = 1.0 / self.frequencia_missao
+                step_frente = self.foward_velocity * dt
+                self.target_pose.pose.position.y -= step_frente # Move no eixo -Y
+                
+                # 2. Cálculo da correção lateral (no eixo +X)
+                correcao_x = self.kp_strafe * self.line_error
+                # O novo alvo X é a *posição inicial* + correção
+                self.target_pose.pose.position.x = self.START_POS_X + correcao_x
+            return
+
+        # Estado 6: Missão Completa (Pousando)
+        if self.mission_state == MissionState.MISSION_COMPLETE:
+            # Apenas espera...
+            if self.get_time_in_state() > 10.0: # 10s para pousar
+                self.get_logger().info("Pouso concluído. Encerrando.")
+                rclpy.shutdown()
+            return
             
-            # Espera pelo próximo ciclo 
-            rate.sleep()
-                
-        self.get_logger().info("[MISSÃO] Loop de seguir linha terminado. Parando o drone.")
-        
-        # Envia um comando de parada total
-        twist_msg.linear.x = 0.0
-        twist_msg.linear.y = 0.0
-        twist_msg.linear.z = 0.0
-        twist_msg.angular.x = 0.0
-        twist_msg.angular.y = 0.0
-        twist_msg.angular.z = 0.0
-        
-        # Publica o comando de parada algumas vezes para garantir
-        for _ in range(5):
-            self.vel_pub.publish(twist_msg)
-            time.sleep(0.05)
-        
-        return True
-
+        # Estado 7: Pouso de Emergência
+        if self.mission_state == MissionState.EMERGENCY_LAND:
+            self.get_logger().error("ESTADO DE EMERGÊNCIA: Pousando agora.")
+            self.land_drone()
+            self.set_mission_state(MissionState.MISSION_COMPLETE) # Reusa o estado de pouso
+            return
 
 # ===== Main =====
 def main():
     rclpy.init()
     node = DroneNode()
-
-    # Parâmetros da Missão
-    ALTITUDE_DE_VOO = 2.5 # Altitude da missão 
-    
-    # Posição inicial para começar a ver a linha 
-    START_POS_X = 0.0
-    START_POS_Y = -2.0 
-    
     try:
-        # Decolar para a altitude da missão
-        if node.arm_and_takeoff(ALTITUDE_DE_VOO): 
-            
-            # Mover para a posição inicial (onde a câmera vê a linha)
-            node.get_logger().info("[MISSÂO] Movendo para a posição inicial da linha...")
-            node.go_to_position(START_POS_X, START_POS_Y, ALTITUDE_DE_VOO)
-
-            node.get_logger().info("[MISSÃO] Posição inicial alcançada. Aguardando 2s para estabilizar.")
-            time.sleep(2.0)
-            
-            # Iniciar o modo de seguir a linha
-            # Esta função só termina quando o travessão é visto
-            node.follow_line()
-        else:
-            node.get_logger().error("[MISSÃO] Falha na decolagem. Abortando missão.")
-
-    except Exception as e:
-        node.get_logger().error(f"[MISSÃO] Erro inesperado na missão: {e}. Acionando pouso de emergência.")
-        node.land_drone() 
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().warn("[MAIN] Missão interrompida pelo usuário (Ctrl+C). Acionando pouso de emergência.")
+        node.set_mission_state(MissionState.EMERGENCY_LAND)
+        # Dá um segundo para o comando de pouso ser enviado
+        time.sleep(1.0)
     finally:
-        node.get_logger().info("[MISSÃO] Encerrando missão.")
+        node.get_logger().info("[MAIN] Encerrando missão.")
         node.destroy_node()
         rclpy.shutdown()
 
