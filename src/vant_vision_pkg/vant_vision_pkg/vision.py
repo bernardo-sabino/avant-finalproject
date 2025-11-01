@@ -99,7 +99,7 @@ class VisionNode(Node):
             error_msg.data = float(error)
         
         else:   # A linha não foi detectada
-            error_msg.data = 0.0 
+            error_msg.data = float('nan')
         
         self.error_pub.publish(error_msg) # Publicando o erro para manipulação por parte do nó de navegação
 
