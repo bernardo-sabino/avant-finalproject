@@ -34,6 +34,7 @@ class DroneNode(Node):
         
         self.current_state = State() # O estado atual retornado pelo pela MAVLink (apenas inicializando antes de pegar a resposta no topic)
         self.current_pose = None # Inicializando a posição atual do drone
+        self.current_orientation = None # Orientação atual do Drone (rotation)
 
         # Publishers
         self.local_pos_pub = self.create_publisher(PoseStamped, \
@@ -55,8 +56,10 @@ class DroneNode(Node):
     def pose_cb(self, msg):
         if msg and msg.pose: 
             self.current_pose = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+            self.current_orientation = msg.pose.orientation
         else:
             self.current_pose = None
+            self.current_orientation = None
     
     # ===== Método de Conexão com a FCU =====
 
@@ -139,6 +142,56 @@ class DroneNode(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result() and future.result().success
 
+    # ===== MÉTODOS DE MOVIMENTAÇÃO =====
+    
+    def go_to_position(self, x, y, z, tolerance=0.2):
+
+        """
+        Move o drone para uma posição (x, y, z) e espera até chegar.
+        """
+        self.get_logger().info(f"[MISSÃO] Iniciando a missão do travessão: movendo para uma visualização melhor das linhas")
+
+        target_pose = PoseStamped()
+        target_pose.header.frame_id = 'map' # Usando o frame 'map' (coordenadas do mundo)
+        target_pose.pose.position.x = float(x)
+        target_pose.pose.position.y = float(y)
+        target_pose.pose.position.z = float(z)
+
+        # Orientação padrão (drone virado para a frente, sem rotação)
+        target_pose.pose.orientation = self.current_orientation
+
+        while rclpy.ok():
+            # Atualiza o timestamp (importante para o MAVROS)
+            target_pose.header.stamp = self.get_clock().now().to_msg()
+            
+            # Publica a posição alvo
+            self.local_pos_pub.publish(target_pose)
+
+            # Processa callbacks (ESSENCIAL para atualizar self.current_pose)
+            rclpy.spin_once(self, timeout_sec=0.1) 
+
+            # Verifica se já temos uma Posição Atual
+            if self.current_pose is None:
+                self.get_logger().warn("[POSIÇÃO] Aguardando posição atual do drone...")
+                time.sleep(0.5)
+                continue
+
+            # Calcula a distância até o alvo
+            current_x, current_y, current_z = self.current_pose
+            dx = current_x - x
+            dy = current_y - y
+            dz = current_z - z
+            distance = math.sqrt(dx**2 + dy**2 + dz**2)
+
+            # Verifica se o drone chegou à posição (dentro da tolerância)
+            if distance < tolerance:
+                self.get_logger().info("Posição alcançada com sucesso!")
+                break
+        
+        # Espera 1 segundo para estabilizar no ponto antes de prosseguir
+        time.sleep(1)
+        return True
+
     # ===== Iniciando o Drone =====
 
     """
@@ -209,6 +262,8 @@ def main():
     try:
         if node.arm_and_takeoff(3.0): 
             time.sleep(8)
+            node.go_to_position(0,-1,3)
+            node.go_to_position(0,0,3)
             node.land_drone()
     except Exception as e:
         node.get_logger().error(f"Erro na missão: {e}. Acionando pouso.")
@@ -220,3 +275,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
