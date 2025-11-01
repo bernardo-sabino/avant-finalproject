@@ -10,7 +10,7 @@ from cv_bridge import CvBridge # Ponte para converter imagem ROS -> Imagem Open 
 
 # Interfaces
 from sensor_msgs.msg import Image 
-from std_msgs.msg import Float32  
+from std_msgs.msg import Float32, Bool
 
 # Importação de módulos padrões 
 import time
@@ -43,7 +43,8 @@ class VisionNode(Node):
         self.imagem_centro = 0
 
         # Publisher
-        self.error_pub = self.create_publisher(Float32, '/line_follower/error', 10)
+        self.error_pub = self.create_publisher(Float32, '/line_follower/error', qos_profile)
+        self.crossbar_pub = self.create_publisher(Bool, '/crossbar_detected', 10) 
 
         # Subscriber
         self.imagem_sub = self.create_subscription(
@@ -101,6 +102,27 @@ class VisionNode(Node):
             error_msg.data = 0.0 
         
         self.error_pub.publish(error_msg) # Publicando o erro para manipulação por parte do nó de navegação
+
+        # Detecção do Travessão 
+
+        lower_crossbar = np.array([0, 150, 100])   
+        upper_crossbar = np.array([10, 255, 255])  
+
+        
+        mask_crossbar = cv2.inRange(hsv_frame, lower_crossbar, upper_crossbar)
+        
+        M_crossbar = cv2.moments(mask_crossbar) # Calcular a "área" (peso) da máscara do travessão
+        
+        crossbar_msg = Bool() # Cria a mensagem booleana
+
+        # Se a área de pixels for maior que nosso threshold (para evitar ruído)
+        if M_crossbar["m00"] > 100:
+            crossbar_msg.data = True 
+        else:
+            crossbar_msg.data = False 
+            
+        # Publica o status (True ou False)
+        self.crossbar_pub.publish(crossbar_msg)
 
 
 # ===== Main =====
