@@ -53,7 +53,7 @@ class VisionNode(Node):
             qos_profile
         )
 
-        self.get_logger().info("Nó drone_vision_node (ROI Corrigido) inicializado.")
+        self.get_logger().info("Nó drone_vision_node inicializado.")
                                                                                  
     def imagem_callback(self, msg):
         try:
@@ -81,7 +81,6 @@ class VisionNode(Node):
             # 3. Desenha um retângulo branco nessa área
             cv2.rectangle(self.roi_mask, (0, start_y), (self.imagem_largura, end_y), 255, -1)
             
-            self.get_logger().info(f"Máscara ROI criada. Vendo apenas de y={start_y} até y={end_y}")
 
         # Converta para HSV 
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) 
