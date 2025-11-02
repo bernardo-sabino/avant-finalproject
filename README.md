@@ -85,6 +85,9 @@ cd avant_finalproject/mission_ws
 colcon build 
 ```
 
+**IMPORTANT:** Due to a conflict with some dependencies, some packages may not be loaded during compilation, but the necessary packages will be loaded correctly and the simulation will begin.
+
+
 **Step 6: Running the Simulation**
 Finally, source the workspace you just built and run the tmux launch script.
 
