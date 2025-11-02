@@ -1,0 +1,7 @@
+# Pastas de compilação
+build/
+install/
+log/
+
+# Ambiente de programação Python
+venv/
