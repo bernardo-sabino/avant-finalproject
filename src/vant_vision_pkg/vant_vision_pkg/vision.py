@@ -1,12 +1,12 @@
 # Importação dos módulos básicos do ROS2
 import rclpy
 from rclpy.node import Node 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy # QOS: Controle de comunicação  por definição de políticas e configurações
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy 
 
 # Importações de Visão Computacional
-import cv2 # Biblioteca OpenCV para processamento de imagem
-import numpy as np # Numpy para manipulação de arrays
-from cv_bridge import CvBridge # Ponte para converter imagem ROS -> Imagem Open CV
+import cv2 
+import numpy as np 
+from cv_bridge import CvBridge 
 
 # Interfaces
 from sensor_msgs.msg import Image 
@@ -17,127 +17,132 @@ import time
  
 class VisionNode(Node):
 
-    # Constructor de definição do nó e os atributos iniciais
     def __init__(self):
-        super().__init__("drone_vision_node") # Inicializando o nó
+        super().__init__("drone_vision_node") 
 
         # Configurações da Comunicação 
         qos_profile = QoSProfile(
-
-            reliability=ReliabilityPolicy.BEST_EFFORT, # Essa política define que o sistema não vai garantir que as mensagens serão entregues
-            # Se um pacote se perder ele não vai tentar reenviar esses dados
-
-
-            history=HistoryPolicy.KEEP_LAST, # O nó só armazenerá em seu buffer um número fixo das mensagens mais rescentes
-
-
-            depth=1 # Esse é o número fixo de mensagens armazenadas no buffer
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1 
         )
 
-        self.bridge = CvBridge()   # Inicilizando a ponte (CVBridge)
-        self.imagem_recebida = False # Flag para saber se a imagem foi recebida
+        self.bridge = CvBridge()   
+        self.imagem_recebida = False 
 
         # Dimensões da imagem (definidas no primeiro frame)
         self.imagem_largura = 0
         self.imagem_altura = 0
         self.imagem_centro = 0
 
+        # Limite de área para detecção (Tuning)
+        self.crossbar_area_threshold = 100.0 
+
+        # Máscara da Região de Interesse (ROI)
+        self.roi_mask = None # Inicializado como None
+
         # Publisher
-        self.error_pub = self.create_publisher(Float32, '/line_follower/error', qos_profile)
-        self.crossbar_pub = self.create_publisher(Bool, '/crossbar_detected', 10) 
+        self.error_pub = self.create_publisher(Float32, '/line_follower/error', qos_profile) 
+        self.crossbar_pub = self.create_publisher(Bool, '/crossbar_detected', qos_profile) 
 
         # Subscriber
         self.imagem_sub = self.create_subscription(
             Image,
-            '/camera/image',
+            '/camera/image', 
             self.imagem_callback,
             qos_profile
         )
 
-
-        self.get_logger().info("Nó drone_vision_node inicializado com sucesso")  # Validando que se o constructor
-                                                                                 # chegou até aqui. 
+        self.get_logger().info("Nó drone_vision_node (ROI Corrigido) inicializado.")
+                                                                                 
     def imagem_callback(self, msg):
-
-        """
-        Método chamado a cada frame da imagem carregado, é o lugar que todo processamento de imagem ocorre
-        """
-
-        # Conversão de Imagem ROS2 para Imagem OpenCV
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")      
             self.imagem_recebida = True
         except Exception as e:
             self.get_logger().error(f"Falha ao converter a imagem: {e}")
+            return # Sai da função se a imagem falhar
 
-        # Definição das dimensões
-        if self.imagem_largura == 0:
-            h,w,d = frame.shape
+        # Lógica do ROI 
+        if self.roi_mask is None:
+            h, w, d = frame.shape
             self.imagem_largura = w
             self.imagem_altura = h
             self.imagem_centro = w // 2 
+            self.get_logger().info(f"Dimensões da imagem definidas: {w}x{h}")
 
-        # Processamento de imagem
-
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) # Converter para HSV
-
-        lower_blue = np.array([100, 150, 50]) # Definir o range da cor Azul (lower)
-        upper_blue = np.array([140, 255, 255]) # Definir o range da cor Azul (upper)
-
-        mask = cv2.inRange(hsv_frame, lower_blue, upper_blue) # Cria a máscara
-
-        M = cv2.moments(mask) # Encontrar o Centro da Linha (Centróide)
-
-        error_msg = Float32() # Cria a mensagem de erro
-        
-        if M["m00"] > 0: # A linha foi detectada
-
-            cx = int(M["m10"] / M["m00"]) # Calcula o centro (cx) da linha na imagem
-             
-            error = self.imagem_centro - cx   # Erro = Posição do Centro da Imagem - Posição do Centro da Linha
+            # 1. Cria uma "folha" preta do tamanho da imagem
+            self.roi_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             
+            # Vamos olhar apenas para a METADE DE CIMA da imagem
+            start_y = 0                         # Começa no topo
+            end_y = self.imagem_altura // 2     # Vai até o meio
+            
+            # 3. Desenha um retângulo branco nessa área
+            cv2.rectangle(self.roi_mask, (0, start_y), (self.imagem_largura, end_y), 255, -1)
+            
+            self.get_logger().info(f"Máscara ROI criada. Vendo apenas de y={start_y} até y={end_y}")
+
+        # Converta para HSV 
+        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) 
+
+        # --- Tarefa 1: Detecção da Linha Azul ---
+        lower_blue = np.array([100, 150, 50]) # Calibre este valor
+        upper_blue = np.array([140, 255, 255]) # Calibre este valor
+        mask_blue_original = cv2.inRange(hsv_frame, lower_blue, upper_blue) 
+
+        # Aplica a Máscara ROI (só nos importamos com o azul na metade de cima)
+        mask_blue = cv2.bitwise_and(mask_blue_original, mask_blue_original, mask=self.roi_mask)
+
+        M_blue = cv2.moments(mask_blue) 
+
+        error_msg = Float32() 
+        
+        if M_blue["m00"] > 0: # A linha azul foi detectada (dentro do ROI)
+            cx = int(M_blue["m10"] / M_blue["m00"]) 
+            error = self.imagem_centro - cx   
             error_msg.data = float(error)
+        else:   # A linha azul NÃO foi detectada (no ROI)
+            error_msg.data = float('nan') 
         
-        else:   # A linha não foi detectada
-            error_msg.data = float('nan')
-        
-        self.error_pub.publish(error_msg) # Publicando o erro para manipulação por parte do nó de navegação
+        self.error_pub.publish(error_msg) 
 
-        # Detecção do Travessão 
+        # --- Tarefa 2: Detecção do Travessão (Vermelho) ---
+        lower_red_1 = np.array([0, 150, 100])   
+        upper_red_1 = np.array([10, 255, 255])  
+        mask_red_1 = cv2.inRange(hsv_frame, lower_red_1, upper_red_1)
 
-        lower_crossbar = np.array([0, 150, 100])   
-        upper_crossbar = np.array([10, 255, 255])  
+        lower_red_2 = np.array([170, 150, 100]) 
+        upper_red_2 = np.array([180, 255, 255]) 
+        mask_red_2 = cv2.inRange(hsv_frame, lower_red_2, upper_red_2)
+    
+        mask_crossbar = mask_red_1 + mask_red_2
+        
+        M_crossbar = cv2.moments(mask_crossbar)
+        
+        crossbar_msg = Bool() 
 
-        
-        mask_crossbar = cv2.inRange(hsv_frame, lower_crossbar, upper_crossbar)
-        
-        M_crossbar = cv2.moments(mask_crossbar) # Calcular a "área" (peso) da máscara do travessão
-        
-        crossbar_msg = Bool() # Cria a mensagem booleana
-
-        # Se a área de pixels for maior que nosso threshold (para evitar ruído)
-        if M_crossbar["m00"] > 100:
+        if M_crossbar["m00"] > self.crossbar_area_threshold:
             crossbar_msg.data = True 
         else:
             crossbar_msg.data = False 
             
-        # Publica o status (True ou False)
         self.crossbar_pub.publish(crossbar_msg)
-
-
+        
 # ===== Main =====
 def main():
     rclpy.init()
     node = VisionNode()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt: 
+        node.get_logger().info("Nó de visão encerrado pelo usuário (Ctrl+C).")
     except Exception as e:
         node.get_logger().error(f"Erro na validação de imagem: {e}.")
     finally:
-        node.get_logger().info("Encerrando nó de visão computacional, o drone está cego!.")
+        node.get_logger().info("Encerrando nó de visão computacional.")
         node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
-
