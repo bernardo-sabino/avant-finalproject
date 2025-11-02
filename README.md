@@ -90,6 +90,26 @@ cd Startup
 The Gazebo simulation will now launch, and the drone will begin its mission automatically.
 
 ---
+## 📦 Hardware Actuator Node (`vant_actuator_pkg`)
+
+In addition to the Gazebo simulation, this project includes a third ROS 2 node, `vant_actuator_pkg`, which is responsible for the **physical hardware actuation** of the hook mechanism.
+
+### Scope and Logic
+
+* **Node:** `actuator_node` 
+* **Purpose:** To listen for the `/drone_centered` topic (published by the `drone_mission_node`) and trigger the release of the hook.
+* **Hardware Interface:** This node is designed to run on the **Jetson Orin Nano** and uses the `RPi.GPIO` library to send a signal to **Pin 7**, activating the relay circuit and disengaging the electromagnet.
+
+### ❗️ Important: Simulation vs. Real-World
+
+This package is **hardware-specific** and is **not intended to be run within the x86 Docker simulation**.
+
+The `RPi.GPIO` library can only be compiled and executed on an **ARM-based** processor (like the Jetson). The `colcon build` process will fail inside the x86 Docker container if this dependency is active.
+
+**For Simulation (In Docker):**
+The `vant_actuator_pkg` should **not** be built or launched. The `drone_mission_node` will still publish the `/drone_centered` message, but it will simply be ignored, and the drone will complete its mission by hovering.
+
+---
 
 ## 📄 License
 
