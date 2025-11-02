@@ -64,33 +64,27 @@ joao0607/desafiofinal2025
 ```
 
 **Step 3: Getting the ROS2 Workspace**
-After running Step 2, you will be inside the container's terminal. Now, clone this repository (which contains the mission_ws) inside the container.
+After running Step 2, you will be inside the container's terminal. Now, clone this repository (which contains all the necessary files) inside the container.
 
 ```bash
 git clone https://github.com/bernardo-sabino/avant-finalproject.git
 ```
 
-**Step 4: Replacing Numpy**
-To avoid incompatibility issues, it is necessary to reinstall the NumPy installation that came with the default image, replacing it with a smaller version.
+**Step 4: Run the Installation Script**
+This one-time script will automatically install all dependencies, patch the MAVROS configuration, copy the packages into the ardu_ws, and compile the entire workspace.
 
 ```bash
-pip3 install "numpy<2.0"
+cd avant-finalproject/
+chmod +x install_mission.sh
+./install_mission.sh
 ```
 
-**Step 5: Build all the workspace**
-Compile all the ROS 2 packages within the mission_ws directory
+**Step 5: Run the Simulation**
+After the script finishes, the environment is ready. You can now run the main simulation launch script.
 
 ```bash
-cd avant_finalproject/mission_ws
-colcon build 
-```
-
-**Step 6: Running the Simulation**
-Finally, source the workspace you just built and run the tmux launch script.
-
-```bash
-source install/setup.bash
-cd Startup
+source /home/rosuser/ardu_ws/install/setup.bash
+cd home/rosuser/ardu_ws/Startup
 ./start.sh
 ```
 
