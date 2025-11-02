@@ -35,10 +35,9 @@ This project is designed to run entirely within a Docker container. All dependen
 
 ### 1. Prerequisites
 
-You only need three things installed on your **host machine**:
+You only need two things installed on your **host machine**:
 * Linux OS (Ubuntu 22.04 recommended)
 * [Docker Engine](https://docs.docker.com/engine/install/)
-* [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 
 ### 2. Setup
 
