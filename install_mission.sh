@@ -49,7 +49,7 @@ echo "Conteúdo de 'distance_sensor.yaml' substituído por '#placeholder'."
 
 echo "--- 5. Configurando o .yml do tmux ---"
 # Encontra o arquivo .yml na pasta Startup
-TMUX_CONFIG_FILE=$(find $ARDU_WS_PATH/Startup -name "*.yml" -print -quit)
+TMUX_CONFIG_FILE=$(find $ARDU_WS_PATH/Startup -name "Projeto.yml" -print -quit)
 
 if [ -z "$TMUX_CONFIG_FILE" ]; then
     echo "AVISO: Não foi possível encontrar o arquivo .yml do tmux na pasta Startup."
