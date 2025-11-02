@@ -84,7 +84,7 @@ After the script finishes, the environment is ready. You can now run the main si
 
 ```bash
 source /home/rosuser/ardu_ws/install/setup.bash
-cd home/rosuser/ardu_ws/Startup
+cd /home/rosuser/ardu_ws/Startup
 ./start.sh
 ```
 

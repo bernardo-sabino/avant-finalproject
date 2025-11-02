@@ -13,7 +13,6 @@ MISSION_REPO_PATH="/home/rosuser/avant-finalproject"
 
 
 echo "--- 1. Instalando Dependências Python (Pip) ---"
-# Instala tudo de uma vez
 pip3 install "numpy<2.0" 
 echo "Dependências Pip instaladas."
 
@@ -62,14 +61,13 @@ fi
 
 
 echo "--- 6. Copiando Pacotes da Missão para o ardu_ws ---"
-# Copia seus 3 pacotes para o 'src' do workspace de simulação
+# Copia os 3 pacotes para o 'src' do workspace de simulação
 cp -r $MISSION_REPO_PATH/src/* $ARDU_WS_PATH/src/
 echo "Pacotes vant_vision_pkg, vant_navigation_pkg, e vant_actuator_pkg copiados."
 
 
 echo "--- 7. Compilando o Workspace Inteiro ---"
 cd $ARDU_WS_PATH
-# Limpa builds antigos para garantir
 colcon build
 echo "Workspace compilado com sucesso."
 
