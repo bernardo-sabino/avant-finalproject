@@ -1,0 +1,9 @@
+#mavros:
+  #ros__parameters:
+    #distance_sensor:
+     # id: 0
+    #  frame_id: "lidar_link"
+    #  orientation: 0
+    #  field_of_view: 1.0
+   #   min_range: 0.3
+  #    max_range: 30.0
