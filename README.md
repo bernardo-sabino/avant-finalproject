@@ -25,11 +25,8 @@ The project scope is broken down into the following autonomous phases, which cor
 This mission is conducted entirely in the provided Gazebo simulation environment.
 
 ...
-| The drone is a standard PX4 Iris quadcopter... | The environment consists of a dashed blue line and a red dash at the end of the path.|
-| :---: | :---: |
-| !(./assets/vant.png) | !(./assets/gazebo_enviroment.png) |
-...
-
+![The drone is a standard PX4 Iris quadcopter...](./assets/vant.png) 
+![The environment consists of a dashed blue line and a red dash at the end of the path](./assets/gazebo_enviroment.png)
 ---
 
 ## 🚀 Quick Start & Execution
