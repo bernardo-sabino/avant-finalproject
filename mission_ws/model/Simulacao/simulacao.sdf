@@ -1,0 +1,154 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <model name="test">
+    <link name="testlink">
+      <visual name="Haste direita">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Haste direita</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Haste esquerda">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Haste esquerda</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Mangueira">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Mangueira</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Base - Circulo">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Base - Circulo</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Chão">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Chão</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Linha">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Linha</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Base">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Base</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <visual name="Grade">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+            <submesh>
+              <name>Grade</name>
+            </submesh>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal/>
+          </pbr>
+        </material>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>simulacao.dae</uri>
+          </mesh>
+        </geometry>
+        <surface/>
+        <contact/>
+        <collide_bitmask>0x01</collide_bitmask>
+      </collision>
+    </link>
+  </model>
+  <static>true</static>
+</sdf>
