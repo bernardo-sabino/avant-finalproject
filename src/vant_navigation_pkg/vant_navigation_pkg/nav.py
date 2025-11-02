@@ -21,10 +21,9 @@ class MissionState:
     ARM_AND_TAKEOFF = 1 # Enviando comandos de decolagem
     WAIT_FOR_TAKEOFF = 2 # Esperando o drone subir
     MOVING_TO_START = 3  # Indo para o waypoint inicial
-    TURNING_TO_SOUTH = 4 # Girando para -Y
-    FOLLOWING_LINE = 5   # Executando o seguidor de linha
-    MISSION_COMPLETE = 6 # Travessão detectado, pousando
-    EMERGENCY_LAND = 7   # Pouso de emergência
+    FOLLOWING_LINE = 4   # Executando o seguidor de linha
+    MISSION_COMPLETE = 5 # Travessão detectado, pousando
+    EMERGENCY_LAND = 6   # Pouso de emergência
 
 class DroneNode(Node):
 
@@ -44,15 +43,16 @@ class DroneNode(Node):
         self.current_orientation = None 
 
         # --- Parâmetros da Missão ---
-        self.ALTITUDE_DE_VOO = 1.0 
+        self.ALTITUDE_DE_VOO = 3.0
         self.START_POS_X = 0.0
         self.START_POS_Y = -2.0 
         self.tolerance = 0.3 # Tolerância de 30cm para waypoints
 
         # --- Parâmetros de Controle (Seguidor de Linha) ---
-        self.kp_strafe = 0.002 # Ganho Proporcional para o movimento lateral
-        self.foward_velocity = 0.25 # Anda 25cm para frente a cada passo
-        self.frequencia_missao = 5.0 # Hz (5 "passos" por segundo)
+        self.kp_strafe_left = 0.005 # Ganho Proporcional para o movimento lateral esquerdo
+        self.kp_strafe_right = 0.09 # Ganho Proporcional para o movimento lateral direito
+        self.foward_velocity = 0.3 # Anda 25cm para frente a cada passo
+        self.frequencia_missao = 10.0 # Hz (10 "passos" por segundo)
 
         # --- Variáveis de Estado da Visão ---
         self.line_error = 0.0
@@ -66,10 +66,7 @@ class DroneNode(Node):
         # --- Alvos de Posição/Orientação ---
         self.target_pose = PoseStamped()
         self.target_pose.header.frame_id = 'map'
-        self.south_orientation_q = Quaternion()
-        target_yaw_rad_south = -math.pi / 2.0
-        self.south_orientation_q.z = math.sin(target_yaw_rad_south / 2.0)
-        self.south_orientation_q.w = math.cos(target_yaw_rad_south / 2.0)
+        self.orientation_to_keep = None # Trava a orientação inicial aqui
 
 
         # Publishers
@@ -114,6 +111,11 @@ class DroneNode(Node):
         if msg and msg.pose: 
             self.current_pose = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
             self.current_orientation = msg.pose.orientation
+            
+            # Trava a orientação inicial na primeira vez que a pose é recebida
+            if self.orientation_to_keep is None:
+                self.orientation_to_keep = self.current_orientation
+                self.get_logger().info("Orientação inicial travada.")
     
     def error_callback(self, msg):
         if math.isnan(msg.data):
@@ -223,7 +225,7 @@ class DroneNode(Node):
         
         # Estado 0: Inicialização
         if self.mission_state == MissionState.INIT:
-            if self.current_state_mav.connected and self.current_pose is not None:
+            if self.current_state_mav.connected and self.orientation_to_keep is not None:
                 self.get_logger().info("FCU conectada e pose recebida. Iniciando missão.")
                 self.set_mission_state(MissionState.ARM_AND_TAKEOFF)
             else:
@@ -241,6 +243,7 @@ class DroneNode(Node):
             self.target_pose.pose.position.x = self.current_pose[0]
             self.target_pose.pose.position.y = self.current_pose[1]
             self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
+            self.target_pose.pose.orientation = self.orientation_to_keep
             self.set_mission_state(MissionState.WAIT_FOR_TAKEOFF)
             return
 
@@ -253,31 +256,18 @@ class DroneNode(Node):
                 self.target_pose.pose.position.x = self.START_POS_X
                 self.target_pose.pose.position.y = self.START_POS_Y
                 self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
-                self.target_pose.pose.orientation = self.current_orientation # Mantém orientação
+                self.target_pose.pose.orientation = self.orientation_to_keep # Mantém orientação
                 self.set_mission_state(MissionState.MOVING_TO_START)
             return
 
         # Estado 3: Movendo para a Posição Inicial
         if self.mission_state == MissionState.MOVING_TO_START:
             if self.check_distance_to_target():
-                self.get_logger().info("Posição inicial alcançada. Girando para o Sul.")
-                # Define o próximo alvo (mesma posição, nova orientação)
-                self.target_pose.pose.position.x = self.START_POS_X
-                self.target_pose.pose.position.y = self.START_POS_Y
-                self.target_pose.pose.position.z = self.ALTITUDE_DE_VOO
-                self.target_pose.pose.orientation = self.south_orientation_q # Gira para o Sul
-                self.set_mission_state(MissionState.TURNING_TO_SOUTH)
-            return
-
-        # Estado 4: Girando para o Sul
-        if self.mission_state == MissionState.TURNING_TO_SOUTH:
-            # Espera 3 segundos para o giro completar
-            if self.get_time_in_state() > 3.0:
-                self.get_logger().info("Giro concluído. Iniciando seguidor de linha.")
+                self.get_logger().info("Posição inicial alcançada. Iniciando seguidor de linha.")
                 self.set_mission_state(MissionState.FOLLOWING_LINE)
             return
 
-        # Estado 5: Seguindo a Linha
+        # Estado 4: Seguindo a Linha
         if self.mission_state == MissionState.FOLLOWING_LINE:
             # Verifica a condição de parada
             if self.crossbar_detected:
@@ -286,30 +276,44 @@ class DroneNode(Node):
                 self.land_drone()
                 return
 
-            # Lógica do seguidor (Sua lógica de "passo-a-passo")
             if self.line_lost:
                 self.get_logger().warn("[MISSÃO] Linha perdida! Pairando no local...", throttle_duration_sec=1.0)
-                # O loop mavros_stream_timer continua publicando a última pose,
-                # então o drone paira (hover) automaticamente.
+                # Não faz nada, fica pairando no waypoint atual
+                # O mavros_stream_timer continua publicando a pose atual
+            
+            elif self.current_pose is None:
+                 self.get_logger().warn("Seguindo linha sem pose! Pairando...", throttle_duration_sec=1.0)
+                 # Paira se perder a pose
+            
             else:
-                # LINHA ENCONTRADA: Calcular e atualizar o próximo waypoint
+                # LINHA ENCONTRADA: Calcular o próximo waypoint
+                
                 # Suas orientações: -Y (frente), +X (esquerda)
                 # Nosso erro: error = centro - cx.
-                # Se linha está à ESQUERDA (cx < centro), error é POSITIVO (ex: 70.0)
+                # Se linha está à ESQUERDA (cx < centro), error é POSITIVO (ex: 200.0)
                 # Precisamos corrigir para a ESQUERDA (mover drone no eixo +X).
                 
-                # 1. Cálculo do passo para frente (no eixo -Y)
-                dt = 1.0 / self.frequencia_missao
-                step_frente = self.foward_velocity * dt
-                self.target_pose.pose.position.y -= step_frente # Move no eixo -Y
+                base_x = self.current_pose[0]
+                base_y = self.current_pose[1]
+
+                # 1. Cálculo da correção lateral (no eixo +X)
+                if self.line_error > 0:
+                    correcao_x = self.kp_strafe_left * self.line_error
+                else:
+                    correcao_x = self.kp_strafe_right * self.line_error
+
+                target_x = base_x + correcao_x
                 
-                # 2. Cálculo da correção lateral (no eixo +X)
-                correcao_x = self.kp_strafe * self.line_error
-                # O novo alvo X é a *posição inicial* + correção
-                self.target_pose.pose.position.x = self.START_POS_X + correcao_x
+                # 2. Cálculo do passo para frente (no eixo -Y)
+                target_y = base_y - self.foward_velocity
+
+                # 3. Atualizar o alvo
+                self.target_pose.pose.position.x = target_x
+                self.target_pose.pose.position.y = target_y
+                
             return
 
-        # Estado 6: Missão Completa (Pousando)
+        # Estado 5: Missão Completa (Pousando)
         if self.mission_state == MissionState.MISSION_COMPLETE:
             # Apenas espera...
             if self.get_time_in_state() > 10.0: # 10s para pousar
@@ -317,7 +321,7 @@ class DroneNode(Node):
                 rclpy.shutdown()
             return
             
-        # Estado 7: Pouso de Emergência
+        # Estado 6: Pouso de Emergência
         if self.mission_state == MissionState.EMERGENCY_LAND:
             self.get_logger().error("ESTADO DE EMERGÊNCIA: Pousando agora.")
             self.land_drone()
