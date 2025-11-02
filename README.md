@@ -70,7 +70,14 @@ After running Step 2, you will be inside the container's terminal. Now, clone th
 git clone https://github.com/bernardo-sabino/avant-finalproject.git
 ```
 
-**Step 4: Build all the workspace**
+**Step 4: Replacing Numpy**
+To avoid incompatibility issues, it is necessary to reinstall the NumPy installation that came with the default image, replacing it with a smaller version.
+
+```bash
+pip3 install "numpy<2.0"
+```
+
+**Step 5: Build all the workspace**
 Compile all the ROS 2 packages within the mission_ws directory
 
 ```bash
@@ -78,7 +85,7 @@ cd avant_finalproject/mission_ws
 colcon build 
 ```
 
-**Step 5: Running the Simulation**
+**Step 6: Running the Simulation**
 Finally, source the workspace you just built and run the tmux launch script.
 
 ```bash
