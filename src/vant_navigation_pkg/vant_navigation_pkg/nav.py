@@ -10,6 +10,8 @@ from mavros_msgs.msg import State
 # Importação da interfaces
 from geometry_msgs.msg import PoseStamped, Twist, Quaternion
 from std_msgs.msg import Float32, Bool 
+from geometry_msgs.msg import Point
+
 
 # Importação de módulos padrões 
 import math, time
@@ -22,8 +24,10 @@ class MissionState:
     WAIT_FOR_TAKEOFF = 2 # Esperando o drone subir
     MOVING_TO_START = 3  # Indo para o waypoint inicial
     FOLLOWING_LINE = 4   # Executando o seguidor de linha
-    MISSION_COMPLETE = 5 # Travessão detectado, pousando
-    EMERGENCY_LAND = 6   # Pouso de emergência
+    CENTERING_ON_CROSSBAR = 5 # Centralizando na crossbar
+    HOVERING_ON_TARGET = 6 # Ficando parado no centro
+    MISSION_COMPLETE = 7 # Pousando, missão finalizada
+    EMERGENCY_LAND = 8   # Pouso de emergência
 
 class DroneNode(Node):
 
@@ -43,14 +47,14 @@ class DroneNode(Node):
         self.current_orientation = None 
 
         # --- Parâmetros da Missão ---
-        self.ALTITUDE_DE_VOO = 3.0
+        self.ALTITUDE_DE_VOO = 4.0
         self.START_POS_X = 0.0
         self.START_POS_Y = -2.0 
         self.tolerance = 0.3 # Tolerância de 30cm para waypoints
 
         # --- Parâmetros de Controle (Seguidor de Linha) ---
-        self.kp_strafe_left = 0.005 # Ganho Proporcional para o movimento lateral esquerdo
-        self.kp_strafe_right = 0.09 # Ganho Proporcional para o movimento lateral direito
+        self.kp_strafe_left = 0.002 # Ganho Proporcional para o movimento lateral esquerdo
+        self.kp_strafe_right = 0.07 # Ganho Proporcional para o movimento lateral direito
         self.foward_velocity = 0.3 # Anda 25cm para frente a cada passo
         self.frequencia_missao = 10.0 # Hz (10 "passos" por segundo)
 
@@ -58,6 +62,19 @@ class DroneNode(Node):
         self.line_error = 0.0
         self.line_lost = True
         self.crossbar_detected = False
+
+        # --- Parâmetros de Controle (Centralização no Travessão) ---
+        self.kp_centering_x = 0.008 # Ganho para corrigir o X do travessão
+        self.kp_centering_y = -0.0025 # Ganho para corrigir o Y do travessão (NEGATIVO)
+        self.centering_tolerance_x = 15 # Tolerância (em pixels) para X (final)
+        self.centering_tolerance_y = 20 # Tolerância (em pixels) para Y (para passar para o Estágio 2)
+
+        # --- Variáveis de Estado da Centralização ---
+        self.crossbar_error_x = 0.0
+        self.crossbar_error_y = 0.0
+        self.crossbar_lost = True
+        
+
 
         # --- Variáveis da Máquina de Estados da Missão ---
         self.mission_state = MissionState.INIT
@@ -88,10 +105,11 @@ class DroneNode(Node):
         )
         self.crossbar_sub = self.create_subscription(
             Bool,
-            '/crossbar_detected',
+            '/crossbar_detected/boolean',
             self.crossbar_callback,
             qos_profile
         )
+        self.crossbar_error_sub = self.create_subscription(Point,'/crossbar_detected/error',self.crossbar_error_callback,qos_profile)
         
         # --- O "Coração" da Missão ---
         # Este timer roda a lógica da missão X vezes por segundo
@@ -128,6 +146,16 @@ class DroneNode(Node):
     def crossbar_callback(self, msg):
         if msg.data:
             self.crossbar_detected = True
+
+    def crossbar_error_callback(self, msg):
+        if math.isnan(msg.x) or math.isnan(msg.y):
+            self.crossbar_lost = True
+            self.crossbar_error_x = 0.0
+            self.crossbar_error_y = 0.0
+        else:
+            self.crossbar_lost = False
+            self.crossbar_error_x = msg.x
+            self.crossbar_error_y = msg.y
             
     # ===== Serviços do Drone (Funções de "Ação") =====
     
@@ -161,7 +189,6 @@ class DroneNode(Node):
                  self.set_mission_state(MissionState.EMERGENCY_LAND)
 
         except Exception as e:
-            # Pega outros erros (como o AttributeError que vimos)
             self.get_logger().error(f"Exceção na chamada de serviço: {e}")
             self.set_mission_state(MissionState.EMERGENCY_LAND)
 
@@ -271,9 +298,8 @@ class DroneNode(Node):
         if self.mission_state == MissionState.FOLLOWING_LINE:
             # Verifica a condição de parada
             if self.crossbar_detected:
-                self.get_logger().info("Travessão detectado! Missão completa.")
-                self.set_mission_state(MissionState.MISSION_COMPLETE)
-                self.land_drone()
+                self.get_logger().info("Travessão detectado! Começando missão de centralização.")
+                self.set_mission_state(MissionState.CENTERING_ON_CROSSBAR)
                 return
 
             if self.line_lost:
@@ -290,13 +316,13 @@ class DroneNode(Node):
                 
                 # Suas orientações: -Y (frente), +X (esquerda)
                 # Nosso erro: error = centro - cx.
-                # Se linha está à ESQUERDA (cx < centro), error é POSITIVO (ex: 200.0)
+                # Se linha está à ESQUERDA (cx < centro), error é POSITIVO 
                 # Precisamos corrigir para a ESQUERDA (mover drone no eixo +X).
                 
                 base_x = self.current_pose[0]
                 base_y = self.current_pose[1]
 
-                # 1. Cálculo da correção lateral (no eixo +X)
+                # Cálculo da correção lateral (no eixo +X)
                 if self.line_error > 0:
                     correcao_x = self.kp_strafe_left * self.line_error
                 else:
@@ -304,16 +330,80 @@ class DroneNode(Node):
 
                 target_x = base_x + correcao_x
                 
-                # 2. Cálculo do passo para frente (no eixo -Y)
+                # Cálculo do passo para frente (no eixo -Y)
                 target_y = base_y - self.foward_velocity
 
-                # 3. Atualizar o alvo
+                # Atualizar o alvo
                 self.target_pose.pose.position.x = target_x
                 self.target_pose.pose.position.y = target_y
                 
             return
+        
+        # Estado 5: Centralizando no Travessão
+        if self.mission_state == MissionState.CENTERING_ON_CROSSBAR:
+            
+            # Condição de parada: Se perdermos o travessão, pairar
+            if self.crossbar_lost:
+                self.get_logger().warn("Perdi o travessão! Pairando no último local.")
+                self.set_mission_state(MissionState.HOVERING_ON_TARGET)
+                return
 
-        # Estado 5: Missão Completa (Pousando)
+            # Lógica de Controle:
+            if self.current_pose is None:
+                self.get_logger().warn("Centralizando sem pose! Pairando...", throttle_duration_sec=1.0)
+                return
+            
+            base_x = self.current_pose[0]
+            base_y = self.current_pose[1]
+
+            # Começa com o alvo parado (manter posição atual)
+            target_x = base_x
+            target_y = base_y
+            
+            # --- Lógica de 2 Estágios (Y primeiro, depois X) ---
+
+            # ESTÁGIO 1: Corrigir Y (Frente/Trás)
+            # Primeiro, nos posicionamos "sobre" o travessão
+            if abs(self.crossbar_error_y) > self.centering_tolerance_y:
+                self.get_logger().info(f"Estágio 1 (Y): Corrigindo Y... Erro: {self.crossbar_error_y:.1f}")
+                
+                # Corrige APENAS o Y
+                correcao_y = self.kp_centering_y * self.crossbar_error_y
+                target_y = base_y + correcao_y
+                # Mantém o X parado (target_x = base_x)
+            
+            # ESTÁGIO 2: Corrigir X (Lateral)
+            # Só executamos se o Y já estiver bom (temos a "visão inteira")
+            elif abs(self.crossbar_error_x) > self.centering_tolerance_x:
+                self.get_logger().info(f"Estágio 2 (X): Corrigindo X... Erro: {self.crossbar_error_x:.1f}")
+                
+                # Corrige APENAS o X
+                correcao_x = self.kp_centering_x * self.crossbar_error_x
+                target_x = base_x + correcao_x
+                # Mantém o Y parado (target_y = base_y)
+
+            # ESTÁGIO 3: Sucesso
+            # Se Y está bom E X está bom
+            else:
+                self.get_logger().info("Centralização no travessão concluída! Pairando.")
+                self.set_mission_state(MissionState.HOVERING_ON_TARGET)
+                return
+            
+            # Atualizar o alvo
+            self.target_pose.pose.position.x = target_x
+            self.target_pose.pose.position.y = target_y
+            return
+    
+        # Estado 6: Pairando no Alvo
+        if self.mission_state == MissionState.HOVERING_ON_TARGET:
+            # Não faz nada. Apenas paira.
+            # O mavros_stream_loop continua publicando a última pose.
+            # O usuário pode dar Ctrl+C para pousar.
+            # Nesse estado ele vai diminuir sua altura
+            self.target_pose.pose.position.z = 3.0
+            return
+
+        # Estado 7: Missão Completa (Pousando)
         if self.mission_state == MissionState.MISSION_COMPLETE:
             # Apenas espera...
             if self.get_time_in_state() > 10.0: # 10s para pousar
