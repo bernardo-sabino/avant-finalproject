@@ -67,7 +67,7 @@ joao0607/desafiofinal2025
 After running Step 2, you will be inside the container's terminal. Now, clone this repository (which contains all the necessary files) inside the container.
 
 ```bash
-git clone https://github.com/bernardo-sabino/avant-finalproject.git
+git clone --depth 1 https://github.com/bernardo-sabino/avant-finalproject.git
 ```
 
 **Step 4: Run the Installation Script**
