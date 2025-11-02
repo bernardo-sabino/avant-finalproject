@@ -11,6 +11,8 @@ from cv_bridge import CvBridge
 # Interfaces
 from sensor_msgs.msg import Image 
 from std_msgs.msg import Float32, Bool
+from geometry_msgs.msg import Point
+
 
 # Importação de módulos padrões 
 import time
@@ -38,12 +40,18 @@ class VisionNode(Node):
         # Limite de área para detecção (Tuning)
         self.crossbar_area_threshold = 100.0 
 
+
+        # Offset de centralização 
+        self.Y_TARGET_OFFSET_PX = -220
+        self.X_TARGET_OFFSET_PX = -240
+
         # Máscara da Região de Interesse (ROI)
         self.roi_mask = None # Inicializado como None
 
         # Publisher
         self.error_pub = self.create_publisher(Float32, '/line_follower/error', qos_profile) 
-        self.crossbar_pub = self.create_publisher(Bool, '/crossbar_detected', qos_profile) 
+        self.crossbar_pub = self.create_publisher(Bool, '/crossbar_detected/boolean', qos_profile) 
+        self.crossbar_error_pub = self.create_publisher(Point, '/crossbar_detected/error', qos_profile)
 
         # Subscriber
         self.imagem_sub = self.create_subscription(
@@ -53,7 +61,7 @@ class VisionNode(Node):
             qos_profile
         )
 
-        self.get_logger().info("Nó drone_vision_node inicializado.")
+        self.get_logger().info("Nó drone_vision_node (ROI Corrigido) inicializado.")
                                                                                  
     def imagem_callback(self, msg):
         try:
@@ -71,23 +79,24 @@ class VisionNode(Node):
             self.imagem_centro = w // 2 
             self.get_logger().info(f"Dimensões da imagem definidas: {w}x{h}")
 
-            # 1. Cria uma "folha" preta do tamanho da imagem
+            # Cria uma "folha" preta do tamanho da imagem
             self.roi_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             
             # Vamos olhar apenas para a METADE DE CIMA da imagem
             start_y = 0                         # Começa no topo
             end_y = self.imagem_altura // 2     # Vai até o meio
             
-            # 3. Desenha um retângulo branco nessa área
+            # Desenha um retângulo branco nessa área
             cv2.rectangle(self.roi_mask, (0, start_y), (self.imagem_largura, end_y), 255, -1)
             
+            self.get_logger().info(f"Máscara ROI criada. Vendo apenas de y={start_y} até y={end_y}")
 
         # Converta para HSV 
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) 
 
         # --- Tarefa 1: Detecção da Linha Azul ---
-        lower_blue = np.array([100, 150, 50]) # Calibre este valor
-        upper_blue = np.array([140, 255, 255]) # Calibre este valor
+        lower_blue = np.array([100, 150, 50]) 
+        upper_blue = np.array([140, 255, 255]) 
         mask_blue_original = cv2.inRange(hsv_frame, lower_blue, upper_blue) 
 
         # Aplica a Máscara ROI (só nos importamos com o azul na metade de cima)
@@ -116,17 +125,42 @@ class VisionNode(Node):
         mask_red_2 = cv2.inRange(hsv_frame, lower_red_2, upper_red_2)
     
         mask_crossbar = mask_red_1 + mask_red_2
-        
         M_crossbar = cv2.moments(mask_crossbar)
-        
-        crossbar_msg = Bool() 
 
-        if M_crossbar["m00"] > self.crossbar_area_threshold:
+        crossbar_msg = Bool() 
+        crossbar_error_msg = Point() # Mensagem para o erro X,Y
+
+        if M_crossbar["m00"] > self.crossbar_area_threshold:        
+            # VIMOS O TRAVESSÃO
             crossbar_msg.data = True 
+
+            # CALCULAR O CENTRO DELE
+            cx_red = int(M_crossbar["m10"] / M_crossbar["m00"])
+            cy_red = int(M_crossbar["m01"] / M_crossbar["m00"])
+
+            # CALCULAR O ERRO X, Y (em pixels)
+
+            target_cx = (self.imagem_largura // 2) + self.X_TARGET_OFFSET_PX
+            error_x = float(target_cx - cx_red)
+        
+            target_cy = (self.imagem_altura // 2) + self.Y_TARGET_OFFSET_PX
+            error_y = float(target_cy - cy_red) 
+        
+            crossbar_error_msg.x = error_x
+            crossbar_error_msg.y = error_y
+
         else:
+
+            # NÃO VEMOS O TRAVESSÃO
             crossbar_msg.data = False 
-            
+
+            # Publica "nan" para o erro
+            crossbar_error_msg.x = float('nan')
+            crossbar_error_msg.y = float('nan')
+
+        # Publica OS DOIS sinais
         self.crossbar_pub.publish(crossbar_msg)
+        self.crossbar_error_pub.publish(crossbar_error_msg)
         
 # ===== Main =====
 def main():
