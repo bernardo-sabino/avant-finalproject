@@ -91,6 +91,46 @@ cd /home/rosuser/ardu_ws/Startup
 The Gazebo simulation will now launch, and the drone will begin its mission automatically.
 
 ---
+## 📈 Data Analysis (`vant_datanalysis_pkg`) 
+vant_datanalysis_pkg is a real-time diagnostics and visualization utility package. Its primary purpose is not to be part of the flight logic, but rather to provide a tool for monitoring, analyzing, and tuning the performance of the navigation controllers.
+
+This package is essential for fine-tuning the proportional gains ($K_p$) and for visually validating the effectiveness of the Finite State Machine (FSM).
+
+### Features and Logic
+
+* **Node:** `data_analysis_node`
+* **Purpose:** Subscribes to the error topics published by vant_vision_pkg and plots the data in real-time using matplotlib
+
+### Multi-Stage Visualization
+
+The node generates two (2) separate plot windows that behave according to the mission's current state:
+
+1. **Plot 1 (Line Following):** Displays the error from the /line_follower/error topic. This plot updates in real-time while the drone is in the FOLLOWING_LINE state.
+
+2. **Plot 2 (Target Centering):** Displays the X and Y errors from the /crossbar_detected/error topic.
+
+### How to Run
+This node is not launched by the main ./start.sh script. It must be run manually in a separate terminal after the main simulation is already running.
+
+**Step 1:** **Open a New Terminal in the Container** With the simulation running in one terminal, open a second terminal and exec into your container:
+
+```bash
+docker exec -it mission_ws bash
+```
+
+**Step 2:** **Launch the Analysis Node** Source your workspace and run the node. Both matplotlib windows will appear on your host machine.
+
+```bash
+source /home/rosuser/ardu_ws/install/setup.bash
+ros2 run vant_datanalysis_pkg data_node
+```
+
+Now you can effectively analyze the proportional control of the system.
+
+![A contral graph of the line following Proportional Control](./assets/line_following_control_graph.png) 
+![A contral graph of the crossbar Proportional Control](./assets/crossbar_control_graph.png) 
+
+---
 ## 📦 Hardware Actuator Node (`vant_actuator_pkg`)
 
 In addition to the Gazebo simulation, this project includes a third ROS 2 node, `vant_actuator_pkg`, which is responsible for the **physical hardware actuation** of the hook mechanism.
