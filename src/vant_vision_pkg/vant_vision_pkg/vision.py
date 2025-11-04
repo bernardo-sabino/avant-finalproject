@@ -43,7 +43,7 @@ class VisionNode(Node):
 
         # Offset de centralização 
         self.Y_TARGET_OFFSET_PX = -220
-        self.X_TARGET_OFFSET_PX = -240
+        self.X_TARGET_OFFSET_PX = -255
 
         # Máscara da Região de Interesse (ROI)
         self.roi_mask = None # Inicializado como None
