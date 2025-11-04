@@ -127,9 +127,6 @@ ros2 run vant_datanalysis_pkg data_node
 
 Now you can effectively analyze the proportional control of the system.
 
-![A contral graph of the line following Proportional Control](./assets/line_following_control_graph.png) 
-![A contral graph of the crossbar Proportional Control](./assets/crossbar_control_graph.png) 
-
 ---
 ## 📦 Hardware Actuator Node (`vant_actuator_pkg`)
 
