@@ -130,7 +130,7 @@ Now you can effectively analyze the proportional control of the system.
 ---
 ## 📦 Hardware Actuator Node (`vant_actuator_pkg`)
 
-In addition to the Gazebo simulation, this project includes a third ROS 2 node, `vant_actuator_pkg`, which is responsible for the **physical hardware actuation** of the hook mechanism.
+In addition to the Gazebo simulation, this project includes another ROS 2 node, `vant_actuator_pkg`, which is responsible for the **physical hardware actuation** of the hook mechanism.
 
 ### Scope and Logic
 
